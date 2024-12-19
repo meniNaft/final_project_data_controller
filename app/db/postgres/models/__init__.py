@@ -16,3 +16,5 @@ from .event_attack_type_association import event_attack_type
 from .event_sub_target_type_association import event_sub_target_type
 from .event_sub_weapon_type_association import event_sub_weapon_type
 from .event_terror_group_association import event_terror_group
+from .event_target_association import event_target
+from .target import Target

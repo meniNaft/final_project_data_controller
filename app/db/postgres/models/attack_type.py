@@ -7,5 +7,5 @@ from app.db.postgres.models.event_attack_type_association import event_attack_ty
 class AttackType(Base):
     __tablename__ = 'attack_type'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    type = Column(String(200), nullable=False)
+    type = Column(String, nullable=False)
     events = relationship("Event", secondary=event_attack_type, back_populates="attack_types")
