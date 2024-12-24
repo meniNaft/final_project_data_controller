@@ -1,4 +1,3 @@
-
 import toolz as t
 import app.services.read_source_data_files_service as read_source_data_service
 from app.db.postgres.models import Event, City, State, Country, Region, SubTargetType, TargetType, SubWeaponType, \
@@ -16,6 +15,7 @@ import app.db.postgres.repositories.sub_weapon_type_repository as sub_weapon_typ
 import app.db.postgres.repositories.attack_type_repository as attack_type_repo
 import app.db.postgres.repositories.terror_group_repository as terror_group_repo
 import app.db.postgres.repositories.event_repository as event_repo
+import app.db.elastic.elastic_repository as elastic_repo
 
 regions_map = {}
 countries_map = {}
@@ -49,6 +49,7 @@ def populate_maps():
 
 
 def upload_data(file_path: str):
+    populate_maps()
     print(datetime.now(), "start processing")
     events = read_source_data_service.read_csv(file_path)
     print(datetime.now(), "csv is loaded")
@@ -63,6 +64,7 @@ def upload_data(file_path: str):
         terrorist_killed_count=max(event['nkillter'], 0) if event['nkillter'] is not None else 0,
         terrorist_injured_count=max(event['nwoundte'], 0) if event['nwoundte'] is not None else 0,
         attack_motive=event['motive'],
+        attack_description=event['summary'],
         city=get_city(event),
         sub_target_types=get_sub_target_types(event),
         sub_weapon_types=get_sub_weapon_types(event),
@@ -72,11 +74,8 @@ def upload_data(file_path: str):
     ) for event in events]
 
     print(datetime.now(), "all event are ready to insert")
-    counter = 1
-    for li in list(t.partition_all(100, new_events)):
-        event_repo.insert_range(li)
-        print(datetime.now(), "inseted - ", counter * 100)
-        counter += 1
+    insert_events_to_elastic(new_events)
+    batch_insert(new_events, event_repo.insert_range, "postgres_insertion")
     print(datetime.now(), "complete processing")
 
 
@@ -274,3 +273,23 @@ def get_weapon_type(type: str):
         weapon_types_map[type] = new_weapon_type
         return new_weapon_type
     return current_weapon_type
+
+
+def insert_events_to_elastic(events: list[Event]):
+    arr = [{
+        "body": event.attack_description if event.attack_description else '',
+        "title": event.attack_motive if event.attack_motive else '',
+        "lat": event.city.lat if event.city and event.city.lat else 0.0,
+        "lon": event.city.lon if event.city and event.city.lon else 0.0,
+        "date": event.date,
+        "category": 'history',
+    } for event in events]
+    batch_insert(arr, elastic_repo.insert_new_documents, "elastic_insertion")
+
+
+def batch_insert(arr: list, callback, insertion_type: str):
+    counter = 1
+    for li in list(t.partition_all(100, arr)):
+        callback(li)
+        print(datetime.now(), insertion_type, "inserted - ", counter * 100)
+        counter += 1

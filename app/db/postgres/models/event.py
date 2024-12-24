@@ -18,6 +18,7 @@ class Event(Base):
     terrorist_injured_count = Column(Integer)
     terrorist_participants = Column(Integer)
     attack_motive = Column(String)
+    attack_description = Column(String)
 
     city_id = Column(Integer, ForeignKey('cities.id', ondelete='CASCADE'))
     city = relationship("City", uselist=False, back_populates="events")
