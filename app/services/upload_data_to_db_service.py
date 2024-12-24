@@ -16,6 +16,7 @@ import app.db.postgres.repositories.attack_type_repository as attack_type_repo
 import app.db.postgres.repositories.terror_group_repository as terror_group_repo
 import app.db.postgres.repositories.event_repository as event_repo
 import app.db.elastic.elastic_repository as elastic_repo
+import app.db.neo4j.repositories.neo4j_repository as neo4j_repo
 
 regions_map = {}
 countries_map = {}
@@ -48,22 +49,28 @@ def populate_maps():
     terror_groups_map = {tg.name: tg for tg in terror_group_repo.get_all()}
 
 
-def upload_data(file_path: str):
+def upload_data(first_file_path: str, second_file_path: str):
     populate_maps()
     print(datetime.now(), "start processing")
-    events = read_source_data_service.read_csv(file_path)
+    events = read_source_data_service.read_csv(first_file_path)
+    second_csv = read_source_data_service.read_csv(second_file_path)
+    correct_keys_name = rename_keys(second_csv)
+    for elem in correct_keys_name:
+        convert_second_csv_date(elem)
+
+    events.extend(correct_keys_name)
     print(datetime.now(), "csv is loaded")
 
     new_events = [Event(
         date=date(event['iyear'],
                   event['imonth'] if event['imonth'] > 0 else 1,
                   event['iday'] if event['iday'] > 0 else 1),
-        terrorist_participants=max(event['nperps'], 0) if event['nperps'] is not None else 0,
-        civilian_killed_count=max(event['nkill'], 0) if event['nkill'] is not None else 0,
-        civilian_injured_count=max(event['nwound'], 0) if event['nwound'] is not None else 0,
-        terrorist_killed_count=max(event['nkillter'], 0) if event['nkillter'] is not None else 0,
-        terrorist_injured_count=max(event['nwoundte'], 0) if event['nwoundte'] is not None else 0,
-        attack_motive=event['motive'],
+        terrorist_participants=max(event.get('nperps', 0) or 0, 0),
+        civilian_killed_count=max(event.get('nkill', 0) or 0, 0),
+        civilian_injured_count=max(event.get('nwound', 0) or 0, 0),
+        terrorist_killed_count=max(event.get('nkillter', 0) or 0, 0),
+        terrorist_injured_count=max(event.get('nwoundte', 0) or 0, 0),
+        attack_motive=event.get('motive'),
         attack_description=event['summary'],
         city=get_city(event),
         sub_target_types=get_sub_target_types(event),
@@ -75,8 +82,32 @@ def upload_data(file_path: str):
 
     print(datetime.now(), "all event are ready to insert")
     insert_events_to_elastic(new_events)
+    insert_events_to_neo4j(new_events)
     batch_insert(new_events, event_repo.insert_range, "postgres_insertion")
     print(datetime.now(), "complete processing")
+
+
+def rename_keys(data_list):
+    column_mapping = {
+        'City': 'city',
+        'Perpetrator': 'gname',
+        'Weapon': 'weapsubtype1_txt',
+        'Injuries': 'nwound',
+        'Fatalities': 'nkill',
+        'Description': 'summary'
+    }
+    return [{column_mapping.get(key, key): value for key, value in row.items()} for row in data_list]
+
+
+def convert_second_csv_date(obj: dict):
+    try:
+        date_obj = datetime.strptime(obj['Date'], "%d-%b-%y")
+    except ValueError:
+        raise ValueError(f"Invalid date format: {obj['Date']}")
+
+    obj['iyear'] = date_obj.year
+    obj['imonth'] = date_obj.month
+    obj['iday'] = date_obj.day
 
 
 def get_city(event: dict):
@@ -86,27 +117,27 @@ def get_city(event: dict):
     current_city = cities_map.get(event['city'])
     if not current_city:
         new_city = City(
-            name=event['city'],
-            lat=event['latitude'],
-            lon=event['longitude'],
+            name=event.get('city'),
+            lat=event.get('latitude'),
+            lon=event.get('longitude'),
             state=get_state(event)
         )
-        cities_map[event['city']] = new_city
+        cities_map[event.get('city')] = new_city
         return new_city
     return current_city
 
 
 def get_state(event: dict):
-    if not event['provstate']:
+    if not event.get('provstate'):
         return None
 
-    current_state = states_map.get(event['provstate'])
+    current_state = states_map.get(event.get('provstate'))
     if not current_state:
         new_state = State(
-            name=event['provstate'],
+            name=event.get('provstate'),
             country=get_country(event)
         )
-        states_map[event['provstate']] = new_state
+        states_map[event.get('provstate')] = new_state
         return new_state
     return current_state
 
@@ -134,9 +165,10 @@ def get_region(event: dict):
 
 def get_sub_target_types(event: dict):
     sub_target_types = [s for s in [
-        event['targsubtype1_txt'],
-        event['targsubtype2_txt'],
-        event['targsubtype3_txt']
+
+        event.get('targsubtype1_txt'),
+        event.get('targsubtype2_txt'),
+        event.get('targsubtype3_txt')
     ] if s]
 
     current_sub_target_types = [sub_target_types_map[s] for s in sub_target_types if s in sub_target_types_map]
@@ -166,32 +198,32 @@ def get_sub_target_types(event: dict):
 
 def get_sub_weapon_types(event: dict):
     sub_weapon_types = [s for s in [
-        event['weapsubtype1_txt'],
-        event['weapsubtype2_txt'],
-        event['weapsubtype3_txt'],
-        event['weapsubtype4_txt']
+        event.get('weapsubtype1_txt'),
+        event.get('weapsubtype2_txt'),
+        event.get('weapsubtype3_txt'),
+        event.get('weapsubtype4_txt')
     ] if s]
     current_sub_weapon_types = [sub_weapon_types_map.get(s) for s in sub_weapon_types if s in sub_weapon_types_map]
     if len(current_sub_weapon_types) == 0 and len(sub_weapon_types) > 0:
         new_sun_weapon_type_1 = SubWeaponType(
-            sub_type=event['weapsubtype1_txt'],
-            weapon_type=get_weapon_type(event['weaptype1_txt'])
-        ) if event['weapsubtype1_txt'] else None
+            sub_type=event.get('weapsubtype1_txt'),
+            weapon_type=get_weapon_type(event.get('weaptype1_txt'))
+        ) if event.get('weapsubtype1_txt') else None
 
         new_sun_weapon_type_2 = SubWeaponType(
-            sub_type=event['weapsubtype2_txt'],
-            weapon_type=get_weapon_type(event['weaptype2_txt'])
-        ) if event['weapsubtype2_txt'] else None
+            sub_type=event.get('weapsubtype2_txt'),
+            weapon_type=get_weapon_type(event.get('weaptype2_txt'))
+        ) if event.get('weapsubtype2_txt') else None
 
         new_sun_weapon_type_3 = SubWeaponType(
-            sub_type=event['weapsubtype3_txt'],
-            weapon_type=get_weapon_type(event['weaptype3_txt'])
-        ) if event['weapsubtype3_txt'] else None
+            sub_type=event.get('weapsubtype3_txt'),
+            weapon_type=get_weapon_type(event.get('weaptype3_txt'))
+        ) if event.get('weapsubtype3_txt') else None
 
         new_sun_weapon_type_4 = SubWeaponType(
-            sub_type=event['weapsubtype4_txt'],
-            weapon_type=get_weapon_type(event['weaptype4_txt'])
-        ) if event['weapsubtype4_txt'] else None
+            sub_type=event.get('weapsubtype4_txt'),
+            weapon_type=get_weapon_type(event.get('weaptype4_txt'))
+        ) if event.get('weapsubtype4_txt') else None
         new_subs = [s for s in [
             new_sun_weapon_type_1,
             new_sun_weapon_type_2,
@@ -206,12 +238,12 @@ def get_sub_weapon_types(event: dict):
 
 
 def get_terror_groups(event: dict):
-    terror_groups = [tg for tg in [event['gname'], event['gname2'], event['gname3']] if tg]
+    terror_groups = [tg for tg in [event.get('gname'), event.get('gname2'), event.get('gname3')] if tg]
     current_terror_groups = [terror_groups_map.get(tg) for tg in terror_groups if tg in terror_groups_map]
     if len(current_terror_groups) == 0 and len(terror_groups) > 0:
-        new_terror_group_1 = TerrorGroup(name=event['gname']) if event['gname'] else None
-        new_terror_group_2 = TerrorGroup(name=event['gname2']) if event['gname2'] else None
-        new_terror_group_3 = TerrorGroup(name=event['gname3']) if event['gname3'] else None
+        new_terror_group_1 = TerrorGroup(name=event.get('gname')) if event.get('gname') else None
+        new_terror_group_2 = TerrorGroup(name=event.get('gname2')) if event.get('gname2') else None
+        new_terror_group_3 = TerrorGroup(name=event.get('gname3')) if event.get('gname3') else None
         new_terror_groups = [tg for tg in [new_terror_group_1, new_terror_group_2, new_terror_group_3] if tg]
 
         for tg in new_terror_groups:
@@ -222,12 +254,12 @@ def get_terror_groups(event: dict):
 
 
 def get_attack_types(event: dict):
-    attack_types = [at for at in [event['attacktype1_txt'], event['attacktype2_txt'], event['attacktype3_txt']] if at]
+    attack_types = [at for at in [event.get('attacktype1_txt'), event.get('attacktype2_txt'), event.get('attacktype3_txt')] if at]
     current_attack_types = [attack_types_map.get(at) for at in attack_types if at in attack_types_map]
     if len(current_attack_types) == 0 and len(attack_types) > 0:
-        new_attack_type_1 = AttackType(type=event['attacktype1_txt']) if event['attacktype1_txt'] else None
-        new_attack_type_2 = AttackType(type=event['attacktype2_txt']) if event['attacktype2_txt'] else None
-        new_attack_type_3 = AttackType(type=event['attacktype3_txt']) if event['attacktype3_txt'] else None
+        new_attack_type_1 = AttackType(type=event.get('attacktype1_txt')) if event.get('attacktype1_txt') else None
+        new_attack_type_2 = AttackType(type=event.get('attacktype2_txt')) if event.get('attacktype2_txt') else None
+        new_attack_type_3 = AttackType(type=event.get('attacktype3_txt')) if event.get('attacktype3_txt') else None
         new_attack_types = [at for at in [new_attack_type_1, new_attack_type_2, new_attack_type_3] if at]
 
         for at in new_attack_types:
@@ -239,15 +271,15 @@ def get_attack_types(event: dict):
 
 def get_targets(event: dict):
     targets = [str(t) for t in [
-        event['target1'],
-        event['target2'],
-        event['target3']
+        event.get('target1'),
+        event.get('target2'),
+        event.get('target3')
     ] if t]
     current_targets = [targets_map.get(t) for t in targets if t in targets_map]
     if len(current_targets) == 0 and len(targets) > 0:
-        new_target_1 = Target(target=str(event['target1'])) if event['target1'] else None
-        new_target_2 = Target(target=str(event['target2'])) if event['target2'] else None
-        new_target_3 = Target(target=str(event['target3'])) if event['target3'] else None
+        new_target_1 = Target(target=str(event.get('target1'))) if event.get('target1') else None
+        new_target_2 = Target(target=str(event.get('target2'))) if event.get('target2') else None
+        new_target_3 = Target(target=str(event.get('target3'))) if event.get('target3') else None
         new_targets = [t for t in [new_target_1, new_target_2, new_target_3] if t]
 
         for t in new_targets:
@@ -287,9 +319,28 @@ def insert_events_to_elastic(events: list[Event]):
     batch_insert(arr, elastic_repo.insert_new_documents, "elastic_insertion")
 
 
+def insert_events_to_neo4j(events: list[Event]):
+    arr = [{
+        "City": event.city.name if event.city and hasattr(event.city, 'name') else None,
+        "Country": event.city.state.country.name if event.city and event.city.state and event.city.state.country else None,
+        "State": event.city.state.name if event.city and event.city.state else None,
+        "Region": event.city.state.country.region.name if event.city and event.city.state and event.city.state.country and event.city.state.country.region else None,
+        "Attack_type": event.attack_types[0].type if event.attack_types and event.attack_types[0] else None,
+        "Target_type": event.sub_target_types[0].target_type.type if event.sub_target_types and event.sub_target_types[
+            0] and event.sub_target_types[0].target_type else None,
+        "Group_name": [group.name for group in event.terror_groups] if event.terror_groups else [],
+        "date": event.date if event.date else None,
+        "lat": event.city.lat if event.city and event.city.lat else 0.0,
+        "lon": event.city.lon if event.city and event.city.lon else 0.0
+    } for event in events]
+
+    batch_insert(arr, neo4j_repo.insert_bulk_data, "neo4j_insertion")
+
+
 def batch_insert(arr: list, callback, insertion_type: str):
     counter = 1
-    for li in list(t.partition_all(100, arr)):
+    batch_size = 1000
+    for li in list(t.partition_all(batch_size, arr)):
         callback(li)
-        print(datetime.now(), insertion_type, "inserted - ", counter * 100)
+        print(datetime.now(), insertion_type, "inserted - ", counter * batch_size)
         counter += 1
