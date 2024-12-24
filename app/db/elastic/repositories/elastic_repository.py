@@ -1,9 +1,14 @@
+from datetime import datetime
+
 from kafka import KafkaConsumer
 from elasticsearch import helpers
 from app.db.elastic.database_config import index_name, expected_schema, es
 
 
 def validate_document(document):
+    if "date" in document and type(document['date']) is str:
+        document["date"] = datetime.strptime(document["date"], '%Y-%m-%d').date()
+
     for field, expected_type in expected_schema.items():
         if field not in document:
             print(f"Missing field: {field}")

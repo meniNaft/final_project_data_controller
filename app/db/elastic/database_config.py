@@ -1,5 +1,5 @@
 import datetime
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, NotFoundError
 
 es = Elasticsearch("http://localhost:9200")
 index_name = "terror_attack_data"
@@ -19,8 +19,8 @@ def init_elastic_index():
             "properties": {
                 "body": {"type": "text"},
                 "title": {"type": "text"},
-                "lot": {"type": "float"},
-                "lan": {"type": "float"},
+                "lat": {"type": "float"},
+                "lon": {"type": "float"},
                 "date": {"type": "date"},
                 "category": {"type": "keyword"},
             }
@@ -28,7 +28,10 @@ def init_elastic_index():
     }
     try:
         es.indices.delete(index=index_name)
-    except:
-        pass
+    except NotFoundError:
+        print(f"Index '{index_name}' not found. Proceeding to create a new index.")
+    except Exception as e:
+        print(f"Error deleting index: {e}")
+
     es.indices.create(index=index_name, body=mapping)
     print(f"Index '{index_name}' created successfully.")

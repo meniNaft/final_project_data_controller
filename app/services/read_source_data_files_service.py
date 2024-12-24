@@ -24,12 +24,3 @@ def read_csv(file_path):
         print("Error: File not found.")
     except Exception as e:
         print(f"An error occurred: {e}")
-
-def read_json_file(file_path):
-    try:
-        with open(file_path, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        print("Error: File not found. Please provide a valid file path.")
-    except Exception as e:
-        print(f"An error occurred: {e}")

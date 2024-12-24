@@ -7,7 +7,7 @@ from app.db.postgres.database_config import init_postgres_db
 from app.services.kafka_service.admin import init_topics
 from app.services.kafka_service.consumer import main_consumer
 from app.services.upload_data_to_db_service import upload_data
-import app.db.elastic.elastic_repository as elastic_repo
+import app.db.elastic.repositories.elastic_repository as elastic_repo
 
 load_dotenv(verbose=True)
 NEWS_TOPIC = os.environ["NEWS_TOPIC"]

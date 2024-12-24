@@ -15,7 +15,7 @@ import app.db.postgres.repositories.sub_weapon_type_repository as sub_weapon_typ
 import app.db.postgres.repositories.attack_type_repository as attack_type_repo
 import app.db.postgres.repositories.terror_group_repository as terror_group_repo
 import app.db.postgres.repositories.event_repository as event_repo
-import app.db.elastic.elastic_repository as elastic_repo
+import app.db.elastic.repositories.elastic_repository as elastic_repo
 import app.db.neo4j.repositories.neo4j_repository as neo4j_repo
 
 regions_map = {}
